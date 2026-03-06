@@ -1,0 +1,9 @@
+*.py linguist-language=Python
+*.sh linguist-language=Shell
+*.md linguist-language=Markdown
+*.yml linguist-language=YAML
+*.yaml linguist-language=YAML
+*.json linguist-language=JSON
+
+docs/* linguist-documentation
+vendored/* linguist-vendored

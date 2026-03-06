@@ -1,0 +1,60 @@
+# direnv versions before 2.32.1 don't respect VIRTUAL_ENV for `layout python`, so we require at least that version
+if ! direnv_version v2.32.1 >/dev/null; then
+	echo "direnv v2.32.1 or higher is required. Please update direnv to use this project."
+	exit 1
+fi
+
+# make sure we have `uv`
+if ! command -v uv >/dev/null; then
+	echo "uv is required to manage this project's virtual environment. Please install uv to use this project. "
+	echo "Installation instructions: https://docs.astral.sh/uv/getting-started/installation/"
+	exit 1
+fi
+
+# read .python-version file
+py_version=$(<"$(expand_path ./.python-version)")
+
+# resolve venv path and create it if it doesn't exist (user can override by setting VIRTUAL_ENV first but i don't recommend it)
+VIRTUAL_ENV=${VIRTUAL_ENV:-"$(expand_path ./.venv)"}
+if [[ ! -d "${VIRTUAL_ENV}" ]]; then
+	echo "Creating project virtual environment with uv"
+	uv venv --seed --python "${py_version}" "${VIRTUAL_ENV}"
+fi
+
+# export the venv path and enable it
+export VIRTUAL_ENV
+layout python "${VIRTUAL_ENV}/bin/python"
+
+# if neither UV_CACHE_DIR nor UV_LINK_MODE are set, try to be a little clever (this is optional)
+if [[ -z "${UV_CACHE_DIR}" && -z "${UV_LINK_MODE}" ]]; then
+	# check if the venv and home directories are on the same filesystem
+	home_fs=$(df --output=source,fstype,size,target "${HOME}" | tail -1)
+	venv_fs=$(df --output=source,fstype,size,target "${VIRTUAL_ENV}" | tail -1)
+	# if they are on different filesystems, set UV_LINK_MODE to copy to avoid the link failure warning
+	if [[ "${home_fs}" != "${venv_fs}" ]]; then
+		export UV_LINK_MODE=copy
+	fi
+fi
+
+# enforce constraints.txt if present
+CONSTRAINT_FILE=${CONSTRAINT_FILE:-"${VIRTUAL_ENV}/constraints.txt"}
+if [[ -f ${CONSTRAINT_FILE} ]]; then
+	export PIP_CONSTRAINT=$CONSTRAINT_FILE
+	export UV_CONSTRAINT=$CONSTRAINT_FILE
+fi
+
+# slurminator runtime config examples
+# export SLURMINATOR_NOTIFIER=discord
+# export SLURMINATOR_DATABASE_URL=sqlite+aiosqlite:///data/slurminator.db
+# export SLURMINATOR_POLL_INTERVAL_SECONDS=60
+# export SLURMINATOR_IDLE_WARNING_AFTER_SECONDS=1800
+# export SLURMINATOR_IDLE_KILL_GRACE_SECONDS=1800
+# export SLURMINATOR_GPU_UTILIZATION_THRESHOLD_PERCENT=5
+# export SLURMINATOR_GPU_MEMORY_THRESHOLD_PERCENT=10
+# export SLURMINATOR_NODE_PROBE_MODE=ssh
+# export SLURMINATOR_SSH_EXTRA_ARGS=-o,BatchMode=yes,-o,ConnectTimeout=5
+# export SLURMINATOR_PROBE_COMMAND='nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits'
+# export SLURMINATOR_DISCORD_TOKEN=replace-me
+# export SLURMINATOR_DISCORD_CHANNEL_ID=123456789012345678
+# export SLURMINATOR_DISCORD_ADMIN_ROLE_IDS=111111111111111111,222222222222222222
+# export SLURMINATOR_USER_MAP_PATH=$PWD/data/user-map.example.json

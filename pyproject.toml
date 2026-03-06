@@ -1,0 +1,32 @@
+[project]
+name = "slurminator"
+version = "0.1.0"
+description = "a slurm job monitoring and enforcement bot"
+readme = "README.md"
+authors = [
+    { name = "neggles", email = "aholmes@omnom.net" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.18.4",
+    "discord-py>=2.7.1",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
+    "rich>=14.3.3",
+    "sqlalchemy[aiosqlite]>=2.0.48",
+    "typer>=0.24.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipython>=9.11.0",
+    "ruff>=0.15.5",
+    "ty>=0.0.20",
+]
+
+[project.scripts]
+slurminator = "slurminator.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"

@@ -1,0 +1,4 @@
+# keep this folder, but ignore its contents
+*
+!.gitignore
+!user-map.example.json
