@@ -11,8 +11,8 @@ import discord
 from slurminator.config import Settings
 from slurminator.db import JobWatch
 from slurminator.identity import IdentityDirectory
-from slurminator.models import JobEvaluation, NotificationHandle
-from slurminator.util import format_duration
+from slurminator.models import JobEvaluation, NotificationHandle, WarningContext
+from slurminator.util import format_currency, format_duration, format_hours
 
 if TYPE_CHECKING:
     from slurminator.service import MonitorService
@@ -26,6 +26,7 @@ class Notifier(Protocol):
         watch: JobWatch,
         evaluation: JobEvaluation,
         *,
+        warning_context: WarningContext,
         kill_deadline: datetime,
     ) -> NotificationHandle | None: ...
 
@@ -38,20 +39,51 @@ class StdoutNotifier:
         watch: JobWatch,
         evaluation: JobEvaluation,
         *,
+        warning_context: WarningContext,
         kill_deadline: datetime,
     ) -> NotificationHandle:
         logger.warning(
-            "WARNING job=%s user=%s name=%s idle=%s kill_deadline=%s",
+            "WARNING job=%s user=%s name=%s message=%r kill_deadline=%s",
             watch.job_id,
             watch.user_name,
             watch.job_name,
-            evaluation.summary,
+            self._build_warning_message(watch, evaluation, warning_context, kill_deadline),
             kill_deadline.isoformat(),
         )
         return NotificationHandle()
 
     async def close_warning(self, watch: JobWatch, *, note: str) -> None:
         logger.info("ALERT CLOSED job=%s note=%s", watch.job_id, note)
+
+    def _build_warning_message(
+        self,
+        watch: JobWatch,
+        evaluation: JobEvaluation,
+        warning_context: WarningContext,
+        kill_deadline: datetime,
+    ) -> str:
+        idle_for = (
+            evaluation.observed_at - watch.idle_since_at
+            if watch.idle_since_at is not None
+            else None
+        )
+        lines = [warning_context.custom_intro or "Slurminator found an idle GPU job."]
+        lines.append(f"Job: `{watch.job_id}` (`{watch.job_name}`)")
+        if idle_for is not None:
+            lines.append(f"Idle for: {format_duration(idle_for)}")
+        lines.append(
+            "Current idle waste: "
+            f"{format_hours(warning_context.current_idle_gpu_hours)} GPU-hours"
+            + (
+                f" (~{format_currency(warning_context.current_idle_cost_usd)})"
+                if warning_context.current_idle_cost_usd > 0
+                else ""
+            )
+        )
+        if warning_context.history.warning_count:
+            lines.append(_build_history_line(warning_context))
+        lines.append(f"Kill deadline: {kill_deadline.isoformat()}")
+        return "\n".join(lines)
 
 
 class KillJobButton(discord.ui.Button["KillJobView"]):
@@ -124,12 +156,18 @@ class DiscordNotifier(discord.Client):
         watch: JobWatch,
         evaluation: JobEvaluation,
         *,
+        warning_context: WarningContext,
         kill_deadline: datetime,
     ) -> NotificationHandle:
         channel = await self._get_channel(self.settings.discord_channel_id)
         view = KillJobView(self.service, watch.job_id)
         message = await channel.send(
-            content=self._build_warning_message(watch, evaluation, kill_deadline),
+            content=self._build_warning_message(
+                watch,
+                evaluation,
+                warning_context,
+                kill_deadline,
+            ),
             view=view,
         )
         return NotificationHandle(
@@ -187,6 +225,7 @@ class DiscordNotifier(discord.Client):
         self,
         watch: JobWatch,
         evaluation: JobEvaluation,
+        warning_context: WarningContext,
         kill_deadline: datetime,
     ) -> str:
         mentions = self.identities.discord_mentions(watch.user_name)
@@ -200,13 +239,33 @@ class DiscordNotifier(discord.Client):
         deadline_absolute = discord.utils.format_dt(kill_deadline, style="f")
 
         lines = [
-            f"{owner_reference} Slurminator found an idle GPU job.",
+            (
+                f"{owner_reference} {warning_context.custom_intro}"
+                if warning_context.custom_intro is not None
+                else f"{owner_reference} Slurminator found an idle GPU job."
+            ),
             f"Job: `{watch.job_id}` (`{watch.job_name}`)",
             f"Nodes: `{watch.node_list}` | GPUs requested: `{watch.gpu_count}`",
             f"Observed: {evaluation.summary}",
         ]
         if idle_for is not None:
             lines.append(f"Idle for: {format_duration(idle_for)}")
+        lines.append(
+            "Current idle waste: "
+            f"{format_hours(warning_context.current_idle_gpu_hours)} GPU-hours"
+            + (
+                f" (~{format_currency(warning_context.current_idle_cost_usd)})"
+                if warning_context.current_idle_cost_usd > 0
+                else ""
+            )
+        )
+        if warning_context.gpu_hourly_cost_usd > 0:
+            lines.append(
+                "Cost model: "
+                f"{format_currency(warning_context.gpu_hourly_cost_usd)}/GPU-hour"
+            )
+        if warning_context.history.warning_count:
+            lines.append(_build_history_line(warning_context))
         lines.append(
             "Press **Terminate job** before "
             f"{deadline_relative} ({deadline_absolute}) or Slurminator will cancel it."
@@ -220,3 +279,18 @@ class DiscordNotifier(discord.Client):
                 note,
             ]
         )
+
+
+def _build_history_line(warning_context: WarningContext) -> str:
+    history = warning_context.history
+    parts = [
+        f"History: {history.warning_count} prior warning(s)",
+        f"{format_hours(history.total_idle_gpu_hours)} idle GPU-hours",
+    ]
+    if history.total_idle_cost_usd > 0:
+        parts.append(f"~{format_currency(history.total_idle_cost_usd)} estimated waste")
+    if history.auto_kill_count:
+        parts.append(f"{history.auto_kill_count} auto-kill(s)")
+    if history.manual_kill_count:
+        parts.append(f"{history.manual_kill_count} manual kill(s)")
+    return " | ".join(parts)

@@ -106,3 +106,38 @@ class NotificationHandle:
 class TerminationResult:
     success: bool
     user_message: str
+
+
+@dataclass(slots=True)
+class HistoricalIncident:
+    job_id: str
+    job_name: str
+    resolved_at: datetime
+    resolution: str
+    idle_seconds: float
+    idle_gpu_hours: float
+    estimated_cost_usd: float
+
+
+@dataclass(slots=True)
+class UserHistorySnapshot:
+    user_name: str
+    warning_count: int = 0
+    auto_kill_count: int = 0
+    manual_kill_count: int = 0
+    resolved_without_kill_count: int = 0
+    total_idle_seconds: float = 0.0
+    total_idle_gpu_hours: float = 0.0
+    total_idle_cost_usd: float = 0.0
+    last_incident_at: datetime | None = None
+    recent_incidents: list[HistoricalIncident] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class WarningContext:
+    current_idle_seconds: float
+    current_idle_gpu_hours: float
+    current_idle_cost_usd: float
+    gpu_hourly_cost_usd: float
+    history: UserHistorySnapshot
+    custom_intro: str | None = None

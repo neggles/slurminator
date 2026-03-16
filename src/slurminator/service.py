@@ -9,10 +9,17 @@ from typing import TYPE_CHECKING
 from slurminator.config import Settings
 from slurminator.db import JobWatch, WatchStore
 from slurminator.identity import IdentityDirectory
-from slurminator.models import JobEvaluation, NotificationHandle, SlurmJob, TerminationResult
+from slurminator.models import (
+    JobEvaluation,
+    NotificationHandle,
+    SlurmJob,
+    TerminationResult,
+    WarningContext,
+)
 from slurminator.probe import GpuNodeProber
 from slurminator.slurm import SlurmClient, SlurmCommandError
 from slurminator.util import format_duration, utcnow
+from slurminator.warning_text import WarningMessageComposer
 
 if TYPE_CHECKING:
     from slurminator.notifier import Notifier
@@ -33,6 +40,7 @@ class MonitorService:
         self.slurm = slurm
         self.prober = prober
         self.identities = IdentityDirectory.from_path(settings.user_map_path)
+        self.warning_composer = WarningMessageComposer(settings)
         self.notifier: Notifier | None = None
 
     def set_notifier(self, notifier: "Notifier | None") -> None:
@@ -104,17 +112,24 @@ class MonitorService:
             )
 
         note = f"Cancelled by {actor}."
+        resolved_at = utcnow()
         try:
             await self.slurm.cancel_job(job_id)
         except SlurmCommandError as exc:
             logger.warning("Manual termination failed for %s: %s", job_id, exc)
             return TerminationResult(False, f"Failed to cancel `{job_id}`: {exc}")
 
+        await self._record_warning_incident(
+            watch,
+            resolved_at=resolved_at,
+            resolution="manual-kill",
+            note=note,
+        )
         await self._close_warning_notification(watch, note=note)
 
         await self.store.mark_resolved(
             job_id,
-            utcnow(),
+            resolved_at,
             resolution="manual-kill",
             note=note,
         )
@@ -220,6 +235,12 @@ class MonitorService:
     ) -> None:
         note = "GPU activity resumed, so the alert was closed."
         if watch.warned_at is not None:
+            await self._record_warning_incident(
+                watch,
+                resolved_at=evaluation.observed_at,
+                resolution="resumed",
+                note=note,
+            )
             await self._close_warning_notification(watch, note=note)
             await self.store.clear_warning(
                 watch.job_id,
@@ -264,6 +285,11 @@ class MonitorService:
 
             handle: NotificationHandle | None = None
             warning_delivered = True
+            warning_context = await self._build_warning_context(
+                watch,
+                evaluation,
+                idle_for_seconds=idle_for.total_seconds(),
+            )
             if self.notifier is not None:
                 kill_deadline = evaluation.observed_at + timedelta(
                     seconds=self.settings.idle_kill_grace_seconds
@@ -272,6 +298,7 @@ class MonitorService:
                     handle = await self.notifier.send_warning(
                         watch,
                         evaluation,
+                        warning_context=warning_context,
                         kill_deadline=kill_deadline,
                     )
                 except Exception:
@@ -321,6 +348,12 @@ class MonitorService:
             logger.warning("Auto-cancel failed for %s: %s", watch.job_id, exc)
             return
 
+        await self._record_warning_incident(
+            watch,
+            resolved_at=evaluation.observed_at,
+            resolution="auto-kill",
+            note=note,
+        )
         await self._close_warning_notification(watch, note=note)
 
         await self.store.mark_resolved(
@@ -339,6 +372,12 @@ class MonitorService:
                 continue
 
             note = "Job is no longer running in Slurm."
+            await self._record_warning_incident(
+                watch,
+                resolved_at=now,
+                resolution="gone",
+                note=note,
+            )
             await self._close_warning_notification(watch, note=note)
 
             await self.store.mark_resolved(
@@ -355,3 +394,59 @@ class MonitorService:
             await self.notifier.close_warning(watch, note=note)
         except Exception:
             logger.exception("Failed to close warning for job %s", watch.job_id)
+
+    async def _build_warning_context(
+        self,
+        watch: JobWatch,
+        evaluation: JobEvaluation,
+        *,
+        idle_for_seconds: float,
+    ) -> WarningContext:
+        history = await self.store.get_user_history(watch.user_name)
+        current_idle_gpu_hours = self._estimate_idle_gpu_hours(
+            gpu_count=watch.gpu_count,
+            idle_seconds=idle_for_seconds,
+        )
+        context = WarningContext(
+            current_idle_seconds=idle_for_seconds,
+            current_idle_gpu_hours=current_idle_gpu_hours,
+            current_idle_cost_usd=self._estimate_idle_cost(
+                gpu_count=watch.gpu_count,
+                idle_seconds=idle_for_seconds,
+            ),
+            gpu_hourly_cost_usd=self.settings.gpu_hourly_cost_usd,
+            history=history,
+        )
+        context.custom_intro = await self.warning_composer.compose_intro(
+            watch,
+            evaluation,
+            context,
+        )
+        return context
+
+    async def _record_warning_incident(
+        self,
+        watch: JobWatch,
+        *,
+        resolved_at,
+        resolution: str,
+        note: str,
+    ) -> None:
+        if watch.warned_at is None or watch.idle_since_at is None:
+            return
+        await self.store.record_incident(
+            watch,
+            resolved_at=resolved_at,
+            resolution=resolution,
+            note=note,
+            gpu_hourly_cost_usd=self.settings.gpu_hourly_cost_usd,
+        )
+
+    def _estimate_idle_gpu_hours(self, *, gpu_count: int, idle_seconds: float) -> float:
+        return max(gpu_count, 0) * max(idle_seconds, 0.0) / 3600.0
+
+    def _estimate_idle_cost(self, *, gpu_count: int, idle_seconds: float) -> float:
+        return self.settings.gpu_hourly_cost_usd * self._estimate_idle_gpu_hours(
+            gpu_count=gpu_count,
+            idle_seconds=idle_seconds,
+        )

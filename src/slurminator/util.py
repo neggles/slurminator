@@ -29,3 +29,15 @@ def format_duration(value: timedelta | float | int) -> str:
         parts.append(f"{seconds}s")
 
     return " ".join(parts[:3])
+
+
+def format_currency(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def format_hours(value: float) -> str:
+    if value >= 100:
+        return f"{value:,.0f}"
+    if value >= 10:
+        return f"{value:,.1f}"
+    return f"{value:,.2f}"

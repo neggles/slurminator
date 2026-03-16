@@ -51,6 +51,7 @@ fi
 # export SLURMINATOR_IDLE_KILL_GRACE_SECONDS=1800
 # export SLURMINATOR_GPU_UTILIZATION_THRESHOLD_PERCENT=5
 # export SLURMINATOR_GPU_MEMORY_THRESHOLD_PERCENT=10
+# export SLURMINATOR_GPU_HOURLY_COST_USD=2.5
 # export SLURMINATOR_NODE_PROBE_MODE=ssh
 # export SLURMINATOR_SSH_EXTRA_ARGS=-o,BatchMode=yes,-o,ConnectTimeout=5
 # export SLURMINATOR_PROBE_COMMAND='nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits'
@@ -58,3 +59,7 @@ fi
 # export SLURMINATOR_DISCORD_CHANNEL_ID=123456789012345678
 # export SLURMINATOR_DISCORD_ADMIN_ROLE_IDS=111111111111111111,222222222222222222
 # export SLURMINATOR_USER_MAP_PATH=$PWD/data/user-map.example.json
+# export SLURMINATOR_WARNING_MESSAGE_MODE=openai
+# export OPENAI_API_KEY=replace-me
+# export SLURMINATOR_OPENAI_MODEL=gpt-5-mini
+# export SLURMINATOR_OPENAI_WARNING_STYLE='dryly funny, concise, and not profane'

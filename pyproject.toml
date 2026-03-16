@@ -10,11 +10,13 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.4",
     "discord-py>=2.7.1",
+    "openai>=2.0.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "rich>=14.3.3",
     "sqlalchemy[aiosqlite]>=2.0.48",
     "typer>=0.24.1",
+    "openai>=2.28.0",
 ]
 
 [dependency-groups]

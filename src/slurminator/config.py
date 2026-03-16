@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     idle_kill_grace_seconds: int = 1800
     gpu_utilization_threshold_percent: float = 5.0
     gpu_memory_threshold_percent: float = 10.0
+    gpu_hourly_cost_usd: float = 0.0
+    warning_message_mode: Literal["static", "openai"] = "static"
 
     node_probe_mode: Literal["ssh", "local"] = "ssh"
     node_probe_timeout_seconds: int = 20
@@ -45,6 +47,11 @@ class Settings(BaseSettings):
     discord_admin_role_ids: list[int] = Field(default_factory=list)
 
     user_map_path: Path | None = None
+
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5-mini"
+    openai_timeout_seconds: int = 20
+    openai_warning_style: str = "dryly funny, concise, and not profane"
 
     @field_validator("ssh_extra_args", mode="before")
     @classmethod
@@ -76,3 +83,8 @@ class Settings(BaseSettings):
             msg = "SLURMINATOR_DISCORD_TOKEN is required when notifier=discord"
             raise RuntimeError(msg)
         return self.discord_token.get_secret_value()
+
+    def openai_api_key_value(self) -> str | None:
+        if self.openai_api_key is None:
+            return None
+        return self.openai_api_key.get_secret_value()

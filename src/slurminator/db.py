@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, select
+from sqlalchemy import DateTime, Float, Integer, String, Text, case, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from slurminator.models import NotificationHandle, SlurmJob
+from slurminator.models import (
+    HistoricalIncident,
+    NotificationHandle,
+    SlurmJob,
+    UserHistorySnapshot,
+)
 
 
 class Base(DeclarativeBase):
@@ -36,6 +41,25 @@ class JobWatch(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(64), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class IdleIncident(Base):
+    __tablename__ = "idle_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    job_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    node_list: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    gpu_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    idle_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    warning_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolution: Mapped[str] = mapped_column(String(64), nullable=False)
+    idle_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    idle_gpu_hours: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class WatchStore:
@@ -69,6 +93,125 @@ class WatchStore:
                 )
             )
             return list(result)
+
+    async def get_user_history(
+        self,
+        user_name: str,
+        *,
+        recent_limit: int = 3,
+    ) -> UserHistorySnapshot:
+        async with self.session_factory() as session:
+            summary_result = await session.execute(
+                select(
+                    func.count(IdleIncident.id),
+                    func.coalesce(func.sum(IdleIncident.idle_seconds), 0.0),
+                    func.coalesce(func.sum(IdleIncident.idle_gpu_hours), 0.0),
+                    func.coalesce(func.sum(IdleIncident.estimated_cost_usd), 0.0),
+                    func.coalesce(
+                        func.sum(
+                            case((IdleIncident.resolution == "auto-kill", 1), else_=0)
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case((IdleIncident.resolution == "manual-kill", 1), else_=0)
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    IdleIncident.resolution.in_(("resumed", "gone")),
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.max(IdleIncident.resolved_at),
+                ).where(IdleIncident.user_name == user_name)
+            )
+            summary = summary_result.one()
+
+            recent_result = await session.scalars(
+                select(IdleIncident)
+                .where(IdleIncident.user_name == user_name)
+                .order_by(IdleIncident.resolved_at.desc())
+                .limit(recent_limit)
+            )
+            recent_incidents = [
+                HistoricalIncident(
+                    job_id=incident.job_id,
+                    job_name=incident.job_name,
+                    resolved_at=incident.resolved_at,
+                    resolution=incident.resolution,
+                    idle_seconds=incident.idle_seconds,
+                    idle_gpu_hours=incident.idle_gpu_hours,
+                    estimated_cost_usd=incident.estimated_cost_usd,
+                )
+                for incident in recent_result
+            ]
+
+            return UserHistorySnapshot(
+                user_name=user_name,
+                warning_count=int(summary[0] or 0),
+                total_idle_seconds=float(summary[1] or 0.0),
+                total_idle_gpu_hours=float(summary[2] or 0.0),
+                total_idle_cost_usd=float(summary[3] or 0.0),
+                auto_kill_count=int(summary[4] or 0),
+                manual_kill_count=int(summary[5] or 0),
+                resolved_without_kill_count=int(summary[6] or 0),
+                last_incident_at=summary[7],
+                recent_incidents=recent_incidents,
+            )
+
+    async def record_incident(
+        self,
+        watch: JobWatch,
+        *,
+        resolved_at: datetime,
+        resolution: str,
+        note: str,
+        gpu_hourly_cost_usd: float,
+    ) -> HistoricalIncident | None:
+        if watch.idle_since_at is None or watch.warned_at is None:
+            return None
+
+        idle_seconds = max((resolved_at - watch.idle_since_at).total_seconds(), 0.0)
+        idle_gpu_hours = max(watch.gpu_count, 0) * idle_seconds / 3600.0
+        estimated_cost_usd = max(gpu_hourly_cost_usd, 0.0) * idle_gpu_hours
+
+        async with self.session_factory.begin() as session:
+            session.add(
+                IdleIncident(
+                    job_id=watch.job_id,
+                    user_name=watch.user_name,
+                    job_name=watch.job_name,
+                    node_list=watch.node_list,
+                    gpu_count=watch.gpu_count,
+                    idle_started_at=watch.idle_since_at,
+                    warning_sent_at=watch.warned_at,
+                    resolved_at=resolved_at,
+                    resolution=resolution,
+                    idle_seconds=idle_seconds,
+                    idle_gpu_hours=idle_gpu_hours,
+                    estimated_cost_usd=estimated_cost_usd,
+                    note=note,
+                )
+            )
+
+        return HistoricalIncident(
+            job_id=watch.job_id,
+            job_name=watch.job_name,
+            resolved_at=resolved_at,
+            resolution=resolution,
+            idle_seconds=idle_seconds,
+            idle_gpu_hours=idle_gpu_hours,
+            estimated_cost_usd=estimated_cost_usd,
+        )
 
     async def touch_running_job(
         self,

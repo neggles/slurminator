@@ -13,6 +13,7 @@ Right now the scaffold supports the full Discord path and leaves the notifier la
 - posts a public Discord warning with a kill button after a configurable idle window
 - auto-cancels the job after a second configurable grace period
 - stores watch state in SQLite so restarts do not lose outstanding warnings
+- optionally uses the OpenAI Responses API to write custom warning intros based on prior incidents and estimated idle GPU cost
 
 ## Assumptions in this first pass
 
@@ -20,6 +21,7 @@ Right now the scaffold supports the full Discord path and leaves the notifier la
 - the bot can reach compute nodes either directly over `ssh` or by running locally on the node
 - Discord user IDs are mapped to Slurm usernames through a small JSON file for button authorization
 - if telemetry is missing from any allocated node, the bot backs off instead of shaming someone on incomplete data
+- idle-cost estimates use a single configurable `GPU-hour` dollar rate, so they are intentionally approximate
 
 ## Configuration
 
@@ -33,8 +35,14 @@ Important ones:
 - `SLURMINATOR_IDLE_KILL_GRACE_SECONDS`
 - `SLURMINATOR_GPU_UTILIZATION_THRESHOLD_PERCENT`
 - `SLURMINATOR_GPU_MEMORY_THRESHOLD_PERCENT`
+- `SLURMINATOR_GPU_HOURLY_COST_USD`
 - `SLURMINATOR_NODE_PROBE_MODE=ssh` or `local`
 - `SLURMINATOR_USER_MAP_PATH=$PWD/data/user-map.example.json`
+- `SLURMINATOR_WARNING_MESSAGE_MODE=openai` to enable OpenAI-generated custom intros
+- `SLURMINATOR_OPENAI_MODEL=gpt-5-mini`
+- `SLURMINATOR_OPENAI_WARNING_STYLE='dryly funny, concise, and not profane'`
+
+For OpenAI auth, either set `SLURMINATOR_OPENAI_API_KEY` or the standard `OPENAI_API_KEY`.
 
 `data/user-map.example.json` shows the expected username-to-Discord-ID format.
 
