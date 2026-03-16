@@ -316,9 +316,11 @@ class MonitorService:
                 handle=handle,
             )
             logger.warning(
-                "Warned on idle job %s after %s.",
+                "Warned on idle job %s after %s with %s/%s tone.",
                 watch.job_id,
                 format_duration(idle_for),
+                warning_context.persona_preset,
+                warning_context.severity_band,
             )
             return
 
@@ -417,6 +419,7 @@ class MonitorService:
             gpu_hourly_cost_usd=self.settings.gpu_hourly_cost_usd,
             history=history,
         )
+        context = self.warning_composer.enrich_context(context)
         context.custom_intro = await self.warning_composer.compose_intro(
             watch,
             evaluation,

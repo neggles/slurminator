@@ -140,4 +140,8 @@ class WarningContext:
     current_idle_cost_usd: float
     gpu_hourly_cost_usd: float
     history: UserHistorySnapshot
+    severity_band: Literal["gentle", "pointed", "savage"] = "gentle"
+    persona_preset: str = "snarky"
+    severity_reasons: list[str] = field(default_factory=list)
+    fallback_intro: str = "Slurminator found an idle GPU job."
     custom_intro: str | None = None

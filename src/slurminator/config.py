@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     gpu_memory_threshold_percent: float = 10.0
     gpu_hourly_cost_usd: float = 0.0
     warning_message_mode: Literal["static", "openai"] = "static"
+    warning_persona_preset: Literal["snarky", "bureaucratic", "bardic"] = "snarky"
+    warning_pointed_after_warnings: int = 1
+    warning_savage_after_warnings: int = 3
+    warning_pointed_after_cost_usd: float = 10.0
+    warning_savage_after_cost_usd: float = 50.0
 
     node_probe_mode: Literal["ssh", "local"] = "ssh"
     node_probe_timeout_seconds: int = 20

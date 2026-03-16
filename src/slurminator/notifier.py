@@ -67,7 +67,7 @@ class StdoutNotifier:
             if watch.idle_since_at is not None
             else None
         )
-        lines = [warning_context.custom_intro or "Slurminator found an idle GPU job."]
+        lines = [warning_context.custom_intro or warning_context.fallback_intro]
         lines.append(f"Job: `{watch.job_id}` (`{watch.job_name}`)")
         if idle_for is not None:
             lines.append(f"Idle for: {format_duration(idle_for)}")
@@ -242,7 +242,7 @@ class DiscordNotifier(discord.Client):
             (
                 f"{owner_reference} {warning_context.custom_intro}"
                 if warning_context.custom_intro is not None
-                else f"{owner_reference} Slurminator found an idle GPU job."
+                else f"{owner_reference} {warning_context.fallback_intro}"
             ),
             f"Job: `{watch.job_id}` (`{watch.job_name}`)",
             f"Nodes: `{watch.node_list}` | GPUs requested: `{watch.gpu_count}`",

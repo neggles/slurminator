@@ -39,10 +39,17 @@ Important ones:
 - `SLURMINATOR_NODE_PROBE_MODE=ssh` or `local`
 - `SLURMINATOR_USER_MAP_PATH=$PWD/data/user-map.example.json`
 - `SLURMINATOR_WARNING_MESSAGE_MODE=openai` to enable OpenAI-generated custom intros
+- `SLURMINATOR_WARNING_PERSONA_PRESET=snarky|bureaucratic|bardic`
+- `SLURMINATOR_WARNING_POINTED_AFTER_WARNINGS=1`
+- `SLURMINATOR_WARNING_SAVAGE_AFTER_WARNINGS=3`
+- `SLURMINATOR_WARNING_POINTED_AFTER_COST_USD=10`
+- `SLURMINATOR_WARNING_SAVAGE_AFTER_COST_USD=50`
 - `SLURMINATOR_OPENAI_MODEL=gpt-5-mini`
 - `SLURMINATOR_OPENAI_WARNING_STYLE='dryly funny, concise, and not profane'`
 
 For OpenAI auth, either set `SLURMINATOR_OPENAI_API_KEY` or the standard `OPENAI_API_KEY`.
+
+The persona preset chooses the voice family, and Slurminator automatically escalates from gentle to pointed to savage based on prior warnings, prior kills, and estimated idle cost.
 
 `data/user-map.example.json` shows the expected username-to-Discord-ID format.
 

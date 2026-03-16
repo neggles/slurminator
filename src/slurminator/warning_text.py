@@ -4,14 +4,72 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
+from typing import Literal
 
 from openai import OpenAI
 
 from slurminator.config import Settings
 from slurminator.db import JobWatch
-from slurminator.models import JobEvaluation, WarningContext
+from slurminator.models import JobEvaluation, UserHistorySnapshot, WarningContext
 
 logger = logging.getLogger(__name__)
+
+WarningSeverity = Literal["gentle", "pointed", "savage"]
+
+
+@dataclass(frozen=True, slots=True)
+class WarningTone:
+    severity_band: WarningSeverity
+    style_prompt: str
+    fallback_intro: str
+    reasons: list[str]
+
+
+_PERSONA_STYLES: dict[str, dict[WarningSeverity, tuple[str, str]]] = {
+    "snarky": {
+        "gentle": (
+            "dryly amused, playful, and lightly teasing",
+            "Slurminator noticed your GPUs appear to be enjoying a funded sabbatical.",
+        ),
+        "pointed": (
+            "wry, publicly disappointed, and sharper without becoming abusive",
+            "Slurminator noticed your GPUs have been taking an expensive coffee break.",
+        ),
+        "savage": (
+            "cutting, deadpan, and openly unimpressed while staying professional",
+            "Slurminator noticed your GPUs are once again delivering a breathtaking performance of nothing.",
+        ),
+    },
+    "bureaucratic": {
+        "gentle": (
+            "formal, restrained, and mildly disappointed",
+            "Slurminator is issuing a courteous notice that this GPU allocation appears idle.",
+        ),
+        "pointed": (
+            "formal, firm, and visibly less patient",
+            "Slurminator is issuing a firmer notice that this GPU allocation is idling at shared expense.",
+        ),
+        "savage": (
+            "clinical, icy, and bureaucratically devastating",
+            "Slurminator is issuing a recurring idle-allocation notice because this GPU reservation is again producing no useful work.",
+        ),
+    },
+    "bardic": {
+        "gentle": (
+            "dramatic, witty, and theatrical without being verbose",
+            "Slurminator finds your GPUs upon the stage, yet hears not a single line delivered.",
+        ),
+        "pointed": (
+            "theatrical, biting, and publicly embarrassed for the offender",
+            "Slurminator finds your GPUs holding the stage in silence while the meter keeps perfect time.",
+        ),
+        "savage": (
+            "grandly theatrical, mercilessly mocking, and still concise",
+            "Slurminator finds your GPUs center stage once more, committing fully to the role of expensive scenery.",
+        ),
+    },
+}
 
 
 class WarningMessageComposer:
@@ -38,6 +96,14 @@ class WarningMessageComposer:
         if api_key is not None:
             client_kwargs["api_key"] = api_key
         self._client = OpenAI(**client_kwargs)
+
+    def enrich_context(self, context: WarningContext) -> WarningContext:
+        tone = self._select_tone(context)
+        context.persona_preset = self.settings.warning_persona_preset
+        context.severity_band = tone.severity_band
+        context.severity_reasons = tone.reasons
+        context.fallback_intro = tone.fallback_intro
+        return context
 
     async def compose_intro(
         self,
@@ -70,7 +136,7 @@ class WarningMessageComposer:
 
         response = self._client.responses.create(
             model=self.settings.openai_model,
-            instructions=self._instructions(),
+            instructions=self._instructions(context),
             input=json.dumps(
                 {
                     "user_name": watch.user_name,
@@ -95,6 +161,9 @@ class WarningMessageComposer:
                         context.history.total_idle_cost_usd,
                         2,
                     ),
+                    "warning_persona_preset": context.persona_preset,
+                    "warning_severity_band": context.severity_band,
+                    "severity_reasons": context.severity_reasons,
                     "telemetry_summary": evaluation.summary,
                     "recent_incidents": [
                         {
@@ -121,10 +190,21 @@ class WarningMessageComposer:
         normalized = " ".join(output_text.split())
         return normalized[:320].rstrip()
 
-    def _instructions(self) -> str:
+    def _instructions(self, context: WarningContext) -> str:
+        persona_preset = self.settings.warning_persona_preset
+        style_prompt, _ = _PERSONA_STYLES[persona_preset][context.severity_band]
+        reason_text = (
+            "; ".join(context.severity_reasons)
+            if context.severity_reasons
+            else "first recorded incident"
+        )
         return (
             "You write short public warnings for a shared GPU cluster. "
-            f"Tone: {self.settings.openai_warning_style}. "
+            f"Persona preset: {persona_preset}. "
+            f"Severity band: {context.severity_band}. "
+            f"Voice guidance: {style_prompt}. "
+            f"Extra style guidance: {self.settings.openai_warning_style}. "
+            f"Escalation reason: {reason_text}. "
             "Use only the facts provided. "
             "Write one or two sentences, maximum 320 characters. "
             "Reference repeat-offender history and estimated waste when the facts support it. "
@@ -133,3 +213,75 @@ class WarningMessageComposer:
             "Do not use profanity, emojis, hashtags, or quotation marks. "
             "Return only the warning text."
         )
+
+    def _select_tone(self, context: WarningContext) -> WarningTone:
+        severity_band: WarningSeverity = "gentle"
+        reasons = self._severity_reasons(context.history, context)
+
+        if self._should_use_savage(context.history, context):
+            severity_band = "savage"
+        elif self._should_use_pointed(context.history, context):
+            severity_band = "pointed"
+
+        persona_preset = self.settings.warning_persona_preset
+        style_prompt, fallback_intro = _PERSONA_STYLES[persona_preset][severity_band]
+        return WarningTone(
+            severity_band=severity_band,
+            style_prompt=style_prompt,
+            fallback_intro=fallback_intro,
+            reasons=reasons,
+        )
+
+    def _should_use_pointed(
+        self,
+        history: UserHistorySnapshot,
+        context: WarningContext,
+    ) -> bool:
+        return any(
+            (
+                history.warning_count >= self.settings.warning_pointed_after_warnings,
+                history.manual_kill_count > 0,
+                history.auto_kill_count > 0,
+                context.current_idle_cost_usd >= self.settings.warning_pointed_after_cost_usd,
+                history.total_idle_cost_usd >= self.settings.warning_pointed_after_cost_usd,
+            )
+        )
+
+    def _should_use_savage(
+        self,
+        history: UserHistorySnapshot,
+        context: WarningContext,
+    ) -> bool:
+        return any(
+            (
+                history.warning_count >= self.settings.warning_savage_after_warnings,
+                history.auto_kill_count > 0,
+                history.manual_kill_count >= 2,
+                context.current_idle_cost_usd >= self.settings.warning_savage_after_cost_usd,
+                history.total_idle_cost_usd >= self.settings.warning_savage_after_cost_usd,
+            )
+        )
+
+    def _severity_reasons(
+        self,
+        history: UserHistorySnapshot,
+        context: WarningContext,
+    ) -> list[str]:
+        reasons: list[str] = []
+        if history.warning_count:
+            reasons.append(f"{history.warning_count} prior warning(s)")
+        if history.auto_kill_count:
+            reasons.append(f"{history.auto_kill_count} prior auto-kill(s)")
+        if history.manual_kill_count:
+            reasons.append(f"{history.manual_kill_count} prior manual kill(s)")
+        if context.current_idle_cost_usd >= self.settings.warning_pointed_after_cost_usd:
+            reasons.append(
+                f"current idle cost already at ${context.current_idle_cost_usd:.2f}"
+            )
+        if history.total_idle_cost_usd >= self.settings.warning_pointed_after_cost_usd:
+            reasons.append(
+                f"historical idle cost totals ${history.total_idle_cost_usd:.2f}"
+            )
+        if not reasons:
+            reasons.append("first recorded incident")
+        return reasons
