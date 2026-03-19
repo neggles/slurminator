@@ -72,3 +72,10 @@ Cancel a tracked job from the CLI:
 ```bash
 uv run slurminator kill 123456
 ```
+
+Preview a warning message for tuning persona/escalation:
+
+```bash
+uv run slurminator preview-warning --warning-count 2 --total-idle-cost-usd 18
+```
+
